@@ -1,9 +1,11 @@
+#!/usr/bin/python
+
 import argparse
 import clickhouse_connect
 import matplotlib.pyplot as plt
-import numpy as np
-
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.query import QueryResult
+
 
 Q_PIPELINE_DETAIL = 'SELECT \
     thread_id,              \
@@ -33,12 +35,12 @@ Q_PIPELINE_START_END = 'SELECT \
     WHERE query_id=\'{id}\''
 
 class PipelineTraceData:
-    threadNum       =0
-    processorNum    =0
-    processoridNum  =0
-    stageNum        =0
-    walltime        =0
-    data            =None
+    threadNum:int       =0
+    processorNum:int    =0
+    processoridNum:int  =0
+    stageNum:int        =0
+    walltime:int        =0
+    data:QueryResult    =None
 
     def __init__(self, threadNum, processorNum, processoridNum, stageNum, walltime, data):
         self.threadNum      = threadNum
@@ -51,27 +53,45 @@ class PipelineTraceData:
 
 class GanttGraph:
     pipelineData:PipelineTraceData = None
-    __taskAxis = []
-    __taskMap = {}
+    __ytickHight:int    = 3
+    __taskAxis          = []
+    __taskMap           = {}
+    __colorMap          = {"r":{}, "g":{}, "b":{}}
 
     def __init__(self, data):
         self.pipelineData = data
-        # init task axis
         for i in range(self.pipelineData.threadNum):
-            self.__taskAxis.append((10*(i+1),9))
+            self.__taskAxis.append((self.__ytickHight*(i+1) - int(self.__ytickHight/2), self.__ytickHight-1))
 
-    def __getColor(self, processor_name):
-        return (0.5,0,0)
-
-    def __updateAxis(self, thread_id, processor_name, processor_id, stage_type):
-        if thread_id not in self.__taskMap:
-            self.__taskMap[thread_id] = {"name": str(thread_id),"x":[], "y":self.__taskAxis[len(self.__taskMap)]}
+    def __getColor(self, processor_name, processor_id, stage_type):
+        if processor_name not in self.__colorMap["r"]:
+            self.__colorMap["r"].update({processor_name: (len(self.__colorMap["r"])+1)*(1.0/(self.pipelineData.processorNum+1))})
+        if str(processor_id) not in self.__colorMap["g"]:
+            self.__colorMap["g"].update({str(processor_id): (len(self.__colorMap["g"])+1)*(1.0/(self.pipelineData.processoridNum+1))})
+        if stage_type not in self.__colorMap["b"]:
+            self.__colorMap["b"].update({stage_type: (len(self.__colorMap["b"])+1)*(1.0/(self.pipelineData.stageNum+1))})
         
-        return self.__taskMap[thread_id]
+        return (self.__colorMap["r"][processor_name], self.__colorMap["g"][str(processor_id)], self.__colorMap["b"][stage_type])
+
+    def __updateAx(self, thread_id, processor_name, processor_id, stage_type, start, duration):
+        if thread_id not in self.__taskMap:
+            self.__taskMap[thread_id] = {
+                "name": str(thread_id),
+                "x":[], 
+                "y":self.__taskAxis[len(self.__taskMap)],
+                "color":[]}
+        
+        self.__taskMap[thread_id]["x"].append((start, duration))
+        self.__taskMap[thread_id]["color"].append(self.__getColor(processor_name, processor_id, stage_type))
+
+        return 
 
     def buildGraph(self):
         fig, ax = plt.subplots()
         
+        fig.set_figheight(self.pipelineData.threadNum)
+        fig.set_figwidth(80)
+
         for row in self.pipelineData.data:
             thread_id = row[0]
             processor_name = row[1]
@@ -80,15 +100,16 @@ class GanttGraph:
             start= row[4]
             duration = row[5]
 
-            axis = self.__updateAxis(thread_id, processor_name, processor_id, stage_type)
-            axis["x"].append((start, duration))
-        
-        for task in self.__taskMap:
-            value = self.__taskMap[task]
-            ax.broken_barh(value["x"], value["y"], facecolors='tab:blue')
+            axis = self.__updateAx(thread_id, processor_name, processor_id, stage_type, start, duration)
+            
+        for thread in self.__taskMap:
+            value = self.__taskMap[thread]
+            ax.broken_barh(value["x"], value["y"], facecolors=value["color"])
 
-        ax.set_ylim(5, self.pipelineData.threadNum*10+10)
+        ax.set_ylim(0, self.pipelineData.threadNum*self.__ytickHight+10)
         ax.set_xlim(0, self.pipelineData.walltime + 10)
+        ax.set_yticks([self.__ytickHight*(i+1) for i in range(len(self.__taskMap))], labels=["thread id: " + str(id) for id in self.__taskMap])
+        
         plt.savefig("gantt.svg")
 
 def retrive_data(client: Client, query_id: str):
@@ -116,9 +137,6 @@ def retrive_data(client: Client, query_id: str):
 
     return pData
     
-    
-
-
 
 def main():
     parser = argparse.ArgumentParser(description='clickhouse pipeline trace svg graph throgh the pipeline trace log')
