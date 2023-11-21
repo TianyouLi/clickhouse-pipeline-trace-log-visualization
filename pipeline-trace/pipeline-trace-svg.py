@@ -109,7 +109,8 @@ class GanttGraph:
         ax.set_ylim(0, self.pipelineData.threadNum*self.__ytickHight+10)
         ax.set_xlim(0, self.pipelineData.walltime + 10)
         ax.set_yticks([self.__ytickHight*(i+1) for i in range(len(self.__taskMap))], labels=["thread id: " + str(id) for id in self.__taskMap])
-        
+
+        plt.legend()
         plt.savefig("gantt.svg")
 
 def retrive_data(client: Client, query_id: str):
